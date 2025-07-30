@@ -38,14 +38,12 @@ export class BitstringService {
 
       // Extract the bitstring status list
       const bitstringList = statusListCredential.credentialSubject;
-      console.log('Bitstring list:', bitstringList);
       
       if (!bitstringList || bitstringList.type !== 'BitstringStatusList') {
         throw new Error('Invalid credential: missing or invalid BitstringStatusList');
       }
 
       // Decode the status list
-      console.log('About to decode status list with encodedList:', bitstringList.encodedList);
       const decodedBits = this.decodeStatusList(bitstringList.encodedList);
 
       const result: DecodedStatusList = {
@@ -71,16 +69,13 @@ export class BitstringService {
   }
 
   static decodeStatusList(encodedList: string): Uint8Array {
-    try {
-      console.log('Decoding status list...', { encodedList: encodedList.substring(0, 50) + '...' });
-      
+    try {      
       // Try multiple decoding approaches
       let compressed: Buffer;
       
       try {
         // First try with base64url library
         compressed = base64url.toBuffer(encodedList);
-        console.log('Successfully decoded with base64url library, compressed buffer length:', compressed.length);
       } catch (base64urlError) {
         console.warn('base64url library failed, trying manual decode:', base64urlError);
         
@@ -98,7 +93,6 @@ export class BitstringService {
             bytes[i] = binaryString.charCodeAt(i);
           }
           compressed = Buffer.from(bytes);
-          console.log('Successfully decoded manually, compressed buffer length:', compressed.length);
         } catch (atobError) {
           console.error('Manual base64 decode failed:', atobError);
           throw new Error(`Base64 decoding failed: ${atobError instanceof Error ? atobError.message : 'Unknown error'}`);
@@ -109,38 +103,28 @@ export class BitstringService {
       const hex = Array.from(compressed.subarray(0, 10))
         .map(b => b.toString(16).padStart(2, '0'))
         .join(' ');
-      console.log('First 10 bytes (hex):', hex);
-      console.log('First 2 bytes:', compressed[0], compressed[1]);
       
       // Try different decompression methods
       let decompressed: Uint8Array;
       
       // Check for GZIP magic bytes (1f 8b)
       if (compressed[0] === 0x1f && compressed[1] === 0x8b) {
-        console.log('Detected GZIP format, attempting GZIP decompression...');
         try {
           decompressed = inflate(compressed);
-          console.log('Successfully decompressed with GZIP, decompressed buffer length:', decompressed.length);
         } catch (gzipError) {
           console.error('GZIP decompression failed:', gzipError);
           throw gzipError;
         }
-      } else {
-        console.log('Not GZIP format, trying other methods...');
-        
+      } else {        
         // Try raw deflate
         try {
-          console.log('Attempting raw deflate decompression...');
           decompressed = inflate(compressed, { raw: true });
-          console.log('Successfully decompressed with raw deflate, length:', decompressed.length);
         } catch (deflateError) {
           console.warn('Raw deflate failed:', deflateError);
           
           // Try treating as uncompressed data
           try {
-            console.log('Attempting to treat as uncompressed data...');
             decompressed = new Uint8Array(compressed);
-            console.log('Treating as uncompressed, length:', decompressed.length);
           } catch (rawError) {
             console.error('All decompression methods failed');
             throw new Error(`All decompression methods failed. Deflate: ${deflateError}, Raw: ${rawError}`);
@@ -192,32 +176,24 @@ export class BitstringService {
   }
 
   static decodeEnvelopedCredential(envelopedCred: EnvelopedVerifiableCredential): StatusListCredential {
-    try {
-      console.log('Decoding enveloped credential...', { id: envelopedCred.id });
-      
+    try {      
       // Extract JWT from the id field (remove the data: prefix)
       const jwtToken = envelopedCred.id.replace('data:application/vc-ld+jwt,', '');
-      console.log('Extracted JWT token length:', jwtToken.length);
       
       // Decode JWT payload (simple base64 decode - no signature verification)
       const parts = jwtToken.split('.');
       if (parts.length !== 3) {
         throw new Error(`Invalid JWT format: expected 3 parts, got ${parts.length}`);
       }
-      
-      console.log('JWT parts lengths:', parts.map(p => p.length));
-      
+            
       // Decode the payload (second part)
       const payload = parts[1];
       // Add padding if needed for base64 decoding
       const paddedPayload = payload + '='.repeat((4 - payload.length % 4) % 4);
-      console.log('Decoding payload, original length:', payload.length, 'padded length:', paddedPayload.length);
       
       const decodedPayload = atob(paddedPayload.replace(/-/g, '+').replace(/_/g, '/'));
-      console.log('Decoded payload length:', decodedPayload.length);
       
       const credentialData = JSON.parse(decodedPayload);
-      console.log('Parsed credential data:', credentialData);
       
       return credentialData as StatusListCredential;
     } catch (error) {

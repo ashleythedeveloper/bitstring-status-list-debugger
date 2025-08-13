@@ -5,20 +5,149 @@ import {
   EnvelopedVerifiableCredential,
   DecodedStatusList,
   StatusListResult,
-  BitStatus
+  BitStatus,
+  ErrorCode,
+  DetailedError
 } from '@/types/bitstring';
 
 export class BitstringService {
+  private static createError(code: ErrorCode, message: string, details?: string, statusCode?: number, suggestion?: string): DetailedError {
+    return { code, message, details, statusCode, suggestion };
+  }
+
   static async fetchStatusList(url: string): Promise<StatusListResult> {
     try {
       // Fetch the credential from the URL
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch status list: ${response.status} ${response.statusText}`);
+      let response: Response;
+      try {
+        response = await fetch(url);
+      } catch (fetchError) {
+        // Network-level errors
+        if (fetchError instanceof TypeError && fetchError.message.includes('CORS')) {
+          return {
+            success: false,
+            error: this.createError(
+              ErrorCode.CORS_ERROR,
+              'Cross-origin request blocked',
+              'The server doesn\'t allow requests from this domain.',
+              undefined,
+              'Contact the server administrator to enable CORS, or use a proxy server.'
+            )
+          };
+        }
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.NETWORK_ERROR,
+            'Unable to connect to the server',
+            fetchError instanceof Error ? fetchError.message : 'Network request failed',
+            undefined,
+            'Check your internet connection and verify the URL is correct.'
+          )
+        };
       }
 
-      const credential = await response.json();
+      // Handle HTTP status codes
+      if (!response.ok) {
+        let error: DetailedError;
+        switch (response.status) {
+          case 404:
+            error = this.createError(
+              ErrorCode.NOT_FOUND,
+              'Credential not found',
+              `The URL returned a 404 Not Found error.`,
+              404,
+              'Verify the URL is correct and the credential exists.'
+            );
+            break;
+          case 401:
+            error = this.createError(
+              ErrorCode.UNAUTHORIZED,
+              'Authentication required',
+              'The server requires authentication to access this credential.',
+              401,
+              'Provide valid authentication credentials or contact the credential issuer.'
+            );
+            break;
+          case 403:
+            error = this.createError(
+              ErrorCode.FORBIDDEN,
+              'Access denied',
+              'You don\'t have permission to access this credential.',
+              403,
+              'Contact the credential issuer for access permissions.'
+            );
+            break;
+          case 500:
+            error = this.createError(
+              ErrorCode.SERVER_ERROR,
+              'Server error',
+              'The credential server encountered an internal error.',
+              500,
+              'Try again later or contact the server administrator.'
+            );
+            break;
+          case 502:
+            error = this.createError(
+              ErrorCode.BAD_GATEWAY,
+              'Bad gateway',
+              'The server received an invalid response from an upstream server.',
+              502,
+              'Try again later. The issue is likely temporary.'
+            );
+            break;
+          case 503:
+            error = this.createError(
+              ErrorCode.SERVICE_UNAVAILABLE,
+              'Service unavailable',
+              'The credential service is temporarily unavailable.',
+              503,
+              'The service may be under maintenance. Try again later.'
+            );
+            break;
+          default:
+            error = this.createError(
+              ErrorCode.SERVER_ERROR,
+              `HTTP ${response.status} error`,
+              response.statusText || 'Server returned an error response.',
+              response.status,
+              'Check the URL and try again later.'
+            );
+        }
+        return { success: false, error };
+      }
+
+      // Parse JSON response
+      let credential: any;
+      try {
+        credential = await response.json();
+      } catch (jsonError) {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.INVALID_JSON,
+            'Invalid JSON response',
+            'The server response is not valid JSON.',
+            undefined,
+            'Verify the URL points to a valid credential endpoint.'
+          )
+        };
+      }
       
+      // Validate credential has a type field
+      if (!credential.type) {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.MISSING_CREDENTIAL_TYPE,
+            'Invalid credential format',
+            'The credential is missing the required "type" field.',
+            undefined,
+            'Ensure the URL points to a valid verifiable credential.'
+          )
+        };
+      }
+
       // Determine if it's an enveloped or embedded proof credential
       const isEnveloped = credential.type === 'EnvelopedVerifiableCredential';
       
@@ -28,22 +157,76 @@ export class BitstringService {
       if (isEnveloped) {
         const envelopedCred = credential as EnvelopedVerifiableCredential;
         // Extract and decode JWT from the id field
-        statusListCredential = this.decodeEnvelopedCredential(envelopedCred);
+        const decodeResult = this.decodeEnvelopedCredential(envelopedCred);
+        if ('error' in decodeResult) {
+          return { success: false, error: decodeResult.error };
+        }
+        statusListCredential = decodeResult.credential;
         credentialType = 'enveloped';
-      } else {
+      } else if (Array.isArray(credential.type) || typeof credential.type === 'string') {
         statusListCredential = credential as StatusListCredential;
         credentialType = 'embedded';
+      } else {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.UNSUPPORTED_CREDENTIAL_TYPE,
+            'Unsupported credential type',
+            `Credential type "${credential.type}" is not supported.`,
+            undefined,
+            'Expected "EnvelopedVerifiableCredential" or a standard credential with embedded proof.'
+          )
+        };
       }
 
       // Extract the bitstring status list
       const bitstringList = statusListCredential.credentialSubject;
       
-      if (!bitstringList || bitstringList.type !== 'BitstringStatusList') {
-        throw new Error('Invalid credential: missing or invalid BitstringStatusList');
+      if (!bitstringList) {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.MISSING_BITSTRING_LIST,
+            'Missing BitstringStatusList',
+            'The credential does not contain a credentialSubject field.',
+            undefined,
+            'The credential structure is invalid. Verify it\'s a status list credential.'
+          )
+        };
+      }
+
+      if (bitstringList.type !== 'BitstringStatusList') {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.INVALID_CREDENTIAL_FORMAT,
+            'Invalid BitstringStatusList',
+            `Expected type "BitstringStatusList" but got "${bitstringList.type}".`,
+            undefined,
+            'The credential is not a valid Bitstring Status List credential.'
+          )
+        };
+      }
+
+      if (!bitstringList.encodedList) {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.INVALID_CREDENTIAL_FORMAT,
+            'Missing encoded list',
+            'The BitstringStatusList does not contain an encodedList field.',
+            undefined,
+            'The status list credential is incomplete or corrupted.'
+          )
+        };
       }
 
       // Decode the status list
-      const decodedBits = this.decodeStatusList(bitstringList.encodedList);
+      const decodeResult = this.decodeStatusList(bitstringList.encodedList);
+      if ('error' in decodeResult) {
+        return { success: false, error: decodeResult.error };
+      }
+      const decodedBits = decodeResult.data;
 
       const result: DecodedStatusList = {
         credential: statusListCredential, // Always store the actual credential data
@@ -60,14 +243,21 @@ export class BitstringService {
       };
 
     } catch (error) {
+      // Catch any unexpected errors
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred'
+        error: this.createError(
+          ErrorCode.UNKNOWN_ERROR,
+          'An unexpected error occurred',
+          error instanceof Error ? error.message : 'Unknown error',
+          undefined,
+          'Please try again or report this issue if it persists.'
+        )
       };
     }
   }
 
-  static decodeStatusList(encodedList: string): Uint8Array {
+  static decodeStatusList(encodedList: string): { data: Uint8Array } | { error: DetailedError } {
     try {      
       // Try multiple decoding approaches
       let compressed: Buffer;
@@ -94,7 +284,15 @@ export class BitstringService {
           compressed = Buffer.from(bytes);
         } catch (atobError) {
           console.error('Manual base64 decode failed:', atobError);
-          throw new Error(`Base64 decoding failed: ${atobError instanceof Error ? atobError.message : 'Unknown error'}`);
+          return {
+            error: this.createError(
+              ErrorCode.BASE64_DECODE_ERROR,
+              'Failed to decode Base64URL data',
+              `The encoded list could not be decoded from Base64URL format. ${atobError instanceof Error ? atobError.message : 'Unknown error'}`,
+              undefined,
+              'The encoded data may be corrupted or not properly Base64URL encoded.'
+            )
+          };
         }
       }
       
@@ -112,7 +310,15 @@ export class BitstringService {
           decompressed = inflate(compressed);
         } catch (gzipError) {
           console.error('GZIP decompression failed:', gzipError);
-          throw gzipError;
+          return {
+            error: this.createError(
+              ErrorCode.GZIP_DECODE_ERROR,
+              'Failed to decompress GZIP data',
+              `The GZIP compressed data could not be decompressed. ${gzipError instanceof Error ? gzipError.message : 'Unknown error'}`,
+              undefined,
+              'The compressed data may be corrupted. Try fetching the credential again.'
+            )
+          };
         }
       } else {        
         // Try raw deflate
@@ -126,78 +332,278 @@ export class BitstringService {
             decompressed = new Uint8Array(compressed);
           } catch (rawError) {
             console.error('All decompression methods failed');
-            throw new Error(`All decompression methods failed. Deflate: ${deflateError}, Raw: ${rawError}`);
+            return {
+              error: this.createError(
+                ErrorCode.DECOMPRESSION_ERROR,
+                'Failed to decompress data',
+                `Unable to decompress the encoded list. Tried GZIP and raw deflate. Data header: ${hex}`,
+                undefined,
+                'The data may not be compressed or uses an unsupported compression format.'
+              )
+            };
           }
         }
       }
       
-      return decompressed;
+      return { data: decompressed };
     } catch (error) {
       console.error('Error in decodeStatusList:', error);
       console.error('Encoded list sample:', encodedList.substring(0, 100));
-      console.error('Full encoded list:', encodedList);
-      throw new Error(`Failed to decode status list: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return {
+        error: this.createError(
+          ErrorCode.UNKNOWN_ERROR,
+          'Failed to decode status list',
+          error instanceof Error ? error.message : 'Unknown decoding error',
+          undefined,
+          'An unexpected error occurred while decoding. Please report this issue.'
+        )
+      };
     }
   }
 
-  static getBitStatus(decodedBits: Uint8Array, index: number): boolean {
+  static getBitStatus(decodedBits: Uint8Array, index: number): boolean | DetailedError {
+    if (index < 0) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_INDEX,
+        'Invalid bit index',
+        `Bit index must be non-negative, but got ${index}.`,
+        undefined,
+        'Use a valid index starting from 0.'
+      );
+    }
+
     const byteIndex = Math.floor(index / 8);
     const bitIndex = index % 8;
+    const maxIndex = decodedBits.length * 8 - 1;
     
     if (byteIndex >= decodedBits.length) {
-      throw new Error(`Index ${index} is out of range (max: ${decodedBits.length * 8 - 1})`);
+      return this.createError(
+        ErrorCode.INVALID_BIT_INDEX,
+        'Bit index out of range',
+        `Index ${index} exceeds the maximum index ${maxIndex}.`,
+        undefined,
+        `Valid range is 0 to ${maxIndex}.`
+      );
     }
     
     const byte = decodedBits[byteIndex];
     return (byte & (1 << bitIndex)) !== 0;
   }
 
-  static getBitRange(decodedBits: Uint8Array, startIndex: number, endIndex: number): BitStatus[] {
-    if (startIndex < 0 || endIndex < startIndex) {
-      throw new Error('Invalid range: startIndex must be >= 0 and endIndex must be >= startIndex');
+  static getBitRange(decodedBits: Uint8Array, startIndex: number, endIndex: number): BitStatus[] | DetailedError {
+    if (startIndex < 0) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_RANGE,
+        'Invalid start index',
+        `Start index must be non-negative, but got ${startIndex}.`,
+        undefined,
+        'Use a valid start index starting from 0.'
+      );
+    }
+
+    if (endIndex < startIndex) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_RANGE,
+        'Invalid bit range',
+        `End index (${endIndex}) must be greater than or equal to start index (${startIndex}).`,
+        undefined,
+        'Ensure the end index is not less than the start index.'
+      );
     }
 
     const maxIndex = decodedBits.length * 8 - 1;
-    if (startIndex > maxIndex || endIndex > maxIndex) {
-      throw new Error(`Range [${startIndex}, ${endIndex}] exceeds maximum index ${maxIndex}`);
+    if (startIndex > maxIndex) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_RANGE,
+        'Start index out of range',
+        `Start index ${startIndex} exceeds the maximum index ${maxIndex}.`,
+        undefined,
+        `Valid range is 0 to ${maxIndex}.`
+      );
+    }
+
+    if (endIndex > maxIndex) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_RANGE,
+        'End index out of range',
+        `End index ${endIndex} exceeds the maximum index ${maxIndex}.`,
+        undefined,
+        `Valid range is 0 to ${maxIndex}.`
+      );
+    }
+
+    // Check if range is too large (prevent performance issues)
+    const rangeSize = endIndex - startIndex + 1;
+    if (rangeSize > 10000) {
+      return this.createError(
+        ErrorCode.INVALID_BIT_RANGE,
+        'Range too large',
+        `Range size (${rangeSize}) is too large. Maximum allowed is 10000 bits.`,
+        undefined,
+        'Try a smaller range or check specific bits individually.'
+      );
     }
 
     const result: BitStatus[] = [];
     for (let i = startIndex; i <= endIndex; i++) {
-      result.push({
-        index: i,
-        status: this.getBitStatus(decodedBits, i),
-        purpose: 'revocation' // This could be made dynamic based on the credential
-      });
+      const bitStatus = this.getBitStatus(decodedBits, i);
+      if (typeof bitStatus === 'boolean') {
+        result.push({
+          index: i,
+          status: bitStatus,
+          purpose: 'revocation' // This could be made dynamic based on the credential
+        });
+      }
     }
 
     return result;
   }
 
-  static decodeEnvelopedCredential(envelopedCred: EnvelopedVerifiableCredential): StatusListCredential {
+  static decodeEnvelopedCredential(envelopedCred: EnvelopedVerifiableCredential): { credential: StatusListCredential } | { error: DetailedError } {
     try {      
-      // Extract JWT from the id field (remove the data: prefix)
-      const jwtToken = envelopedCred.id.replace('data:application/vc-ld+jwt,', '');
+      // Validate the id field exists
+      if (!envelopedCred.id) {
+        return {
+          error: this.createError(
+            ErrorCode.JWT_PARSE_ERROR,
+            'Missing JWT token',
+            'The EnvelopedVerifiableCredential does not contain an id field with the JWT.',
+            undefined,
+            'The credential format is invalid.'
+          )
+        };
+      }
+
+      // Extract JWT from the id field (handle multiple possible prefixes)
+      let jwtToken = envelopedCred.id;
       
+      // Try different possible data URL prefixes
+      const possiblePrefixes = [
+        'data:application/vc+jwt,',
+        'data:application/vc-ld+jwt,',
+        'data:application/vc+ld+jwt,',
+        'data:application/jwt,'
+      ];
+      
+      let prefixFound = false;
+      for (const prefix of possiblePrefixes) {
+        if (jwtToken.startsWith(prefix)) {
+          jwtToken = jwtToken.substring(prefix.length);
+          prefixFound = true;
+          break;
+        }
+      }
+      
+      if (!prefixFound) {
+        return {
+          error: this.createError(
+            ErrorCode.JWT_PARSE_ERROR,
+            'Invalid JWT format',
+            `The id field does not contain a valid JWT token with a recognized prefix. Got: "${envelopedCred.id.substring(0, 50)}..."`,
+            undefined,
+            'Expected format: "data:application/vc+jwt,{JWT_TOKEN}" or similar'
+          )
+        };
+      }
+      
+      if (!jwtToken) {
+        return {
+          error: this.createError(
+            ErrorCode.JWT_PARSE_ERROR,
+            'Empty JWT token',
+            'The JWT token is empty after removing the data URL prefix.',
+            undefined,
+            'The credential format is invalid.'
+          )
+        };
+      }
+
       // Decode JWT payload (simple base64 decode - no signature verification)
       const parts = jwtToken.split('.');
       if (parts.length !== 3) {
-        throw new Error(`Invalid JWT format: expected 3 parts, got ${parts.length}`);
+        return {
+          error: this.createError(
+            ErrorCode.JWT_PARSE_ERROR,
+            'Invalid JWT structure',
+            `JWT must have 3 parts (header.payload.signature), but found ${parts.length} parts.`,
+            undefined,
+            'The JWT token is malformed or corrupted.'
+          )
+        };
       }
             
       // Decode the payload (second part)
       const payload = parts[1];
+      if (!payload) {
+        return {
+          error: this.createError(
+            ErrorCode.JWT_PARSE_ERROR,
+            'Empty JWT payload',
+            'The JWT payload section is empty.',
+            undefined,
+            'The JWT token is corrupted.'
+          )
+        };
+      }
+
       // Add padding if needed for base64 decoding
       const paddedPayload = payload + '='.repeat((4 - payload.length % 4) % 4);
       
-      const decodedPayload = atob(paddedPayload.replace(/-/g, '+').replace(/_/g, '/'));
+      let decodedPayload: string;
+      try {
+        decodedPayload = atob(paddedPayload.replace(/-/g, '+').replace(/_/g, '/'));
+      } catch (base64Error) {
+        return {
+          error: this.createError(
+            ErrorCode.BASE64_DECODE_ERROR,
+            'Failed to decode JWT payload',
+            `Could not decode the JWT payload from Base64. ${base64Error instanceof Error ? base64Error.message : 'Unknown error'}`,
+            undefined,
+            'The JWT payload is not valid Base64 encoded data.'
+          )
+        };
+      }
       
-      const credentialData = JSON.parse(decodedPayload);
+      let credentialData: any;
+      try {
+        credentialData = JSON.parse(decodedPayload);
+      } catch (jsonError) {
+        return {
+          error: this.createError(
+            ErrorCode.INVALID_JSON,
+            'Invalid JWT payload JSON',
+            `The JWT payload is not valid JSON. ${jsonError instanceof Error ? jsonError.message : 'Unknown error'}`,
+            undefined,
+            'The JWT contains malformed data.'
+          )
+        };
+      }
       
-      return credentialData as StatusListCredential;
+      // Validate the decoded credential has required fields
+      if (!credentialData.credentialSubject) {
+        return {
+          error: this.createError(
+            ErrorCode.INVALID_CREDENTIAL_FORMAT,
+            'Invalid credential in JWT',
+            'The decoded JWT does not contain a valid StatusListCredential.',
+            undefined,
+            'The JWT payload does not match the expected credential format.'
+          )
+        };
+      }
+
+      return { credential: credentialData as StatusListCredential };
     } catch (error) {
       console.error('Error in decodeEnvelopedCredential:', error);
-      throw new Error(`Failed to decode enveloped credential: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return {
+        error: this.createError(
+          ErrorCode.UNKNOWN_ERROR,
+          'Failed to decode enveloped credential',
+          error instanceof Error ? error.message : 'Unknown error',
+          undefined,
+          'An unexpected error occurred while decoding the JWT.'
+        )
+      };
     }
   }
 

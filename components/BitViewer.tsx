@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { DecodedStatusList, BitStatus } from '@/types/bitstring';
+import { DecodedStatusList, BitStatus, DetailedError } from '@/types/bitstring';
 import { BitstringService } from '@/services/bitstringService';
 import { Search, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 
@@ -18,50 +18,72 @@ export default function BitViewer({ decoded }: BitViewerProps) {
     type: 'single' | 'range';
     data: boolean | BitStatus[];
     index?: number;
-    error?: string;
+    error?: DetailedError;
   } | null>(null);
 
   const handleSingleBitCheck = () => {
-    try {
-      const index = parseInt(singleIndex);
-      if (isNaN(index)) {
-        throw new Error('Please enter a valid number');
-      }
-      
-      const status = BitstringService.getBitStatus(decoded.decodedBits, index);
+    const index = parseInt(singleIndex);
+    if (isNaN(index)) {
+      setResult({
+        type: 'single',
+        data: false,
+        error: {
+          code: 'INVALID_BIT_INDEX' as any,
+          message: 'Invalid input',
+          details: 'Please enter a valid number for the bit index.'
+        }
+      });
+      return;
+    }
+    
+    const status = BitstringService.getBitStatus(decoded.decodedBits, index);
+    
+    if (typeof status === 'boolean') {
       setResult({
         type: 'single',
         data: status,
         index
       });
-    } catch (error) {
+    } else {
+      // status is a DetailedError
       setResult({
         type: 'single',
         data: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: status
       });
     }
   };
 
   const handleRangeCheck = () => {
-    try {
-      const start = parseInt(startIndex);
-      const end = parseInt(endIndex);
-      
-      if (isNaN(start) || isNaN(end)) {
-        throw new Error('Please enter valid numbers for both start and end indices');
-      }
-      
-      const statuses = BitstringService.getBitRange(decoded.decodedBits, start, end);
+    const start = parseInt(startIndex);
+    const end = parseInt(endIndex);
+    
+    if (isNaN(start) || isNaN(end)) {
+      setResult({
+        type: 'range',
+        data: [],
+        error: {
+          code: 'INVALID_BIT_RANGE' as any,
+          message: 'Invalid input',
+          details: 'Please enter valid numbers for both start and end indices.'
+        }
+      });
+      return;
+    }
+    
+    const statuses = BitstringService.getBitRange(decoded.decodedBits, start, end);
+    
+    if (Array.isArray(statuses)) {
       setResult({
         type: 'range',
         data: statuses
       });
-    } catch (error) {
+    } else {
+      // statuses is a DetailedError
       setResult({
         type: 'range',
         data: [],
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: statuses
       });
     }
   };
@@ -158,9 +180,21 @@ export default function BitViewer({ decoded }: BitViewerProps) {
       {result && (
         <div className="space-y-4">
           {result.error ? (
-            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              <AlertCircle className="h-5 w-5" />
-              <span>{result.error}</span>
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h4 className="font-semibold text-red-800">{result.error.message}</h4>
+                  {result.error.details && (
+                    <p className="text-sm text-red-700 mt-1">{result.error.details}</p>
+                  )}
+                  {result.error.suggestion && (
+                    <p className="text-sm text-red-600 mt-2">
+                      <strong>Suggestion:</strong> {result.error.suggestion}
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           ) : result.type === 'single' ? (
             <div className="p-4 bg-gray-50 rounded-lg">

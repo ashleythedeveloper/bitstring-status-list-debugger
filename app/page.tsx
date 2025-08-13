@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { DecodedStatusList } from '@/types/bitstring';
+import { DecodedStatusList, DetailedError } from '@/types/bitstring';
 import { BitstringService } from '@/services/bitstringService';
 import StatusListInput from '@/components/StatusListInput';
 import CredentialInfo from '@/components/CredentialInfo';
@@ -11,7 +11,7 @@ import { AlertCircle, Download } from 'lucide-react';
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [decoded, setDecoded] = useState<DecodedStatusList | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DetailedError | null>(null);
   const [currentUrl, setCurrentUrl] = useState<string>('');
 
   const handleFetchStatusList = async (url: string) => {
@@ -26,10 +26,19 @@ export default function Home() {
       if (result.success && result.data) {
         setDecoded(result.data);
       } else {
-        setError(result.error || 'Failed to fetch and decode status list');
+        setError(result.error || {
+          code: 'UNKNOWN_ERROR' as any,
+          message: 'Failed to fetch and decode status list',
+          details: 'An unexpected error occurred.'
+        });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      setError({
+        code: 'UNKNOWN_ERROR' as any,
+        message: 'An unexpected error occurred',
+        details: err instanceof Error ? err.message : 'Unknown error',
+        suggestion: 'Please try again or check the browser console for more details.'
+      });
     } finally {
       setLoading(false);
     }
@@ -67,11 +76,25 @@ export default function Home() {
       {error && (
         <div className="max-w-4xl mx-auto">
           <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-red-800">Error</h3>
-                <p className="text-sm text-red-700 mt-1">{error}</p>
+            <div className="flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-red-800">
+                  {error.statusCode ? `Error ${error.statusCode}: ` : 'Error: '}{error.message}
+                </h3>
+                {error.details && (
+                  <p className="text-sm text-red-700 mt-1">{error.details}</p>
+                )}
+                {error.suggestion && (
+                  <div className="mt-3 p-2 bg-red-100 rounded">
+                    <p className="text-sm text-red-800">
+                      <strong>💡 Suggestion:</strong> {error.suggestion}
+                    </p>
+                  </div>
+                )}
+                {error.code && (
+                  <p className="text-xs text-red-600 mt-2">Error code: {error.code}</p>
+                )}
               </div>
             </div>
           </div>

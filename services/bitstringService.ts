@@ -3,7 +3,6 @@ import base64url from 'base64url';
 import {
   StatusListCredential,
   EnvelopedVerifiableCredential,
-  BitstringStatusList,
   DecodedStatusList,
   StatusListResult,
   BitStatus

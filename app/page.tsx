@@ -13,18 +13,34 @@ export default function Home() {
   const [decoded, setDecoded] = useState<DecodedStatusList | null>(null);
   const [error, setError] = useState<DetailedError | null>(null);
   const [currentUrl, setCurrentUrl] = useState<string>('');
+  const [autoCheckResult, setAutoCheckResult] = useState<{
+    index: number;
+    status: boolean;
+  } | null>(null);
 
   const handleFetchStatusList = async (url: string) => {
     setLoading(true);
     setError(null);
     setDecoded(null);
     setCurrentUrl(url);
+    setAutoCheckResult(null);
 
     try {
       const result = await BitstringService.fetchStatusList(url);
       
       if (result.success && result.data) {
         setDecoded(result.data);
+        
+        // If there's a bit index in the URL, automatically check it
+        if (result.urlBitIndex !== undefined) {
+          const bitStatus = BitstringService.getBitStatus(result.data.decodedBits, result.urlBitIndex);
+          if (typeof bitStatus === 'boolean') {
+            setAutoCheckResult({
+              index: result.urlBitIndex,
+              status: bitStatus
+            });
+          }
+        }
       } else {
         setError(result.error || {
           code: 'UNKNOWN_ERROR' as any,
@@ -115,6 +131,41 @@ export default function Home() {
               Download JSON
             </button>
           </div>
+          
+          {autoCheckResult && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-blue-800 mb-2">
+                Auto-checked Bit from URL Fragment
+              </h3>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-lg">
+                    Bit #{autoCheckResult.index}: <span className={`font-bold ${
+                      autoCheckResult.status ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      {autoCheckResult.status ? '1 (SET)' : '0 (UNSET)'}
+                    </span>
+                  </p>
+                  <p className="text-sm text-blue-700 mt-1">
+                    Status: {autoCheckResult.status ? 'Revoked/Suspended' : 'Valid/Active'}
+                  </p>
+                </div>
+                <div className={`p-3 rounded-full ${
+                  autoCheckResult.status ? 'bg-red-100' : 'bg-green-100'
+                }`}>
+                  {autoCheckResult.status ? (
+                    <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           
           <CredentialInfo decoded={decoded} />
           <BitViewer decoded={decoded} />

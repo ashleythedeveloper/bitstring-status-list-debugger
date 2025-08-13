@@ -95,4 +95,5 @@ export interface StatusListResult {
   success: boolean;
   data?: DecodedStatusList;
   error?: DetailedError;
+  urlBitIndex?: number; // Bit index extracted from URL fragment
 } 

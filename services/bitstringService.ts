@@ -17,10 +17,51 @@ export class BitstringService {
 
   static async fetchStatusList(url: string): Promise<StatusListResult> {
     try {
-      // Fetch the credential from the URL
+      // Extract bit index from URL fragment if present
+      let urlBitIndex: number | undefined;
+      let cleanUrl = url;
+      
+      const fragmentIndex = url.indexOf('#');
+      if (fragmentIndex !== -1) {
+        const fragment = url.substring(fragmentIndex + 1);
+        cleanUrl = url.substring(0, fragmentIndex);
+        
+        // Try to parse the fragment as a number
+        if (fragment.length > 0) {
+          const parsedIndex = parseInt(fragment, 10);
+          if (!isNaN(parsedIndex)) {
+            if (parsedIndex < 0) {
+              return {
+                success: false,
+                error: this.createError(
+                  ErrorCode.INVALID_BIT_INDEX,
+                  'Invalid fragment index',
+                  `URL fragment contains negative index: #${fragment}`,
+                  undefined,
+                  'The bit index must be a non-negative integer.'
+                )
+              };
+            }
+            urlBitIndex = parsedIndex;
+          } else {
+            return {
+              success: false,
+              error: this.createError(
+                ErrorCode.INVALID_BIT_INDEX,
+                'Malformed fragment',
+                `URL fragment is not a valid number: #${fragment}`,
+                undefined,
+                'The fragment should be a valid integer representing the bit index (e.g., #135).'
+              )
+            };
+          }
+        }
+      }
+      
+      // Fetch the credential from the URL (without fragment)
       let response: Response;
       try {
-        response = await fetch(url);
+        response = await fetch(cleanUrl);
       } catch (fetchError) {
         // Network-level errors
         if (fetchError instanceof TypeError && fetchError.message.includes('CORS')) {
@@ -228,18 +269,35 @@ export class BitstringService {
       }
       const decodedBits = decodeResult.data;
 
+      const totalBits = decodedBits.length * 8;
+      
+      // Validate URL bit index if present
+      if (urlBitIndex !== undefined && urlBitIndex >= totalBits) {
+        return {
+          success: false,
+          error: this.createError(
+            ErrorCode.INVALID_BIT_INDEX,
+            'Index exceeds list length',
+            `Bit index ${urlBitIndex} from URL fragment exceeds the maximum index ${totalBits - 1}.`,
+            undefined,
+            `Valid range is 0 to ${totalBits - 1}.`
+          )
+        };
+      }
+
       const result: DecodedStatusList = {
         credential: statusListCredential, // Always store the actual credential data
         bitstringList,
         decodedBits,
-        totalBits: decodedBits.length * 8,
+        totalBits,
         credentialType,
         originalEnvelopedCredential: isEnveloped ? credential : undefined
       };
 
       return {
         success: true,
-        data: result
+        data: result,
+        urlBitIndex
       };
 
     } catch (error) {

@@ -5,12 +5,14 @@ A Next.js web application for debugging and analyzing Bitstring Status List cred
 ## Features
 
 - **URL Input & Fetching**: Enter any URL pointing to a Bitstring Status List credential
+- **Auto-check from URL**: Automatically checks bit status if URL contains fragment (e.g., `#135`)
 - **Credential Detection**: Automatically detects embedded proof vs enveloped verifiable credentials
 - **Status List Decoding**: Decodes GZIP-compressed, Base64URL-encoded bitstrings
 - **Credential Information Display**: Shows metadata including issuer, validity dates, and purpose
 - **Bit Status Checking**:
   - Check individual bit status by index
   - Check ranges of bits with visual indicators
+- **Detailed Error Messages**: Clear error messages with suggestions for common issues
 - **Export Functionality**: Download analyzed data as JSON
 - **Modern UI**: Responsive design with Tailwind CSS and Lucide icons
 
@@ -54,6 +56,7 @@ yarn start
 ## Usage
 
 1. **Enter URL**: Paste the URL of a Bitstring Status List credential into the input field
+   - Include a fragment (e.g., `https://vckit.untp.showthething.com/credentials/status/bitstring-status-list/3#135`) to automatically check that specific bit
 2. **Fetch & Decode**: Click "Fetch Status List" to retrieve and decode the credential
 3. **View Information**: Review the credential metadata and total bit count
 4. **Check Bits**:

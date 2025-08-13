@@ -25,21 +25,21 @@ A Next.js web application for debugging and analyzing Bitstring Status List cred
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or yarn
+- Node.js 22
+- Yarn 1.22.22
 
 ### Installation
 
 1. Install dependencies:
 
 ```bash
-npm install
+yarn install
 ```
 
 2. Run the development server:
 
 ```bash
-npm run dev
+yarn run dev
 ```
 
 3. Open [http://localhost:3000](http://localhost:3000) in your browser
@@ -47,8 +47,8 @@ npm run dev
 ### Building for Production
 
 ```bash
-npm run build
-npm start
+yarn run build
+yarn start
 ```
 
 ## Usage
